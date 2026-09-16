@@ -33,6 +33,18 @@ namespace AgIO
                     Thread.CurrentThread.CurrentUICulture = new System.Globalization.CultureInfo(RegistrySettings.culture);
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
+
+                    //An unhandled exception on the UI thread otherwise opens the default
+                    //modal error dialog. That dialog pumps its own message loop, so the
+                    //timers and every BeginInvoke - the whole GPS path to AgOpenGPS - stop
+                    //until someone clicks it, and nobody sees it behind a minimized AgIO.
+                    //Log it and keep the data flowing instead.
+                    Application.ThreadException += (sender, args) =>
+                    {
+                        Log.EventWriter("Unhandled UI Exception: " + args.Exception.ToString());
+                        Log.FileSaveSystemEvents();
+                    };
+
                     Application.Run(new FormLoop());
                 }
             }
