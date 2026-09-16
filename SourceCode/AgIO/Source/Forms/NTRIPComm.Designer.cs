@@ -37,7 +37,7 @@ namespace AgIO
 
         public uint tripBytes = 0;
         private int toUDP_Port = 0;
-        private int NTRIP_Watchdog = 100;
+        private int NTRIP_Watchdog = 0;
 
         public bool isNTRIP_RequiredOn = false;
         public bool isNTRIP_Connected = false;
@@ -285,6 +285,7 @@ namespace AgIO
                 if (tmr != null)
                 {
                     tmr.Dispose();
+                    tmr = null;
                 }
 
                 //create new timer at fast rate to start
@@ -297,12 +298,17 @@ namespace AgIO
 
                 try
                 {
-                    // Close the socket if it is still open
-                    if (clientSocket != null && clientSocket.Connected)
+                    // Close the previous socket. A socket whose connect is still in flight
+                    // reports Connected false, so testing that here left it abandoned with a
+                    // pending connect on every retry. Clear the field before closing, so the
+                    // stale OnConnect callback sees itself as no longer current and returns
+                    // instead of tearing down the attempt we are about to start.
+                    Socket oldSocket = clientSocket;
+                    clientSocket = null;
+                    if (oldSocket != null)
                     {
-                        clientSocket.Shutdown(SocketShutdown.Both);
-                        System.Threading.Thread.Sleep(100);
-                        clientSocket.Close();
+                        try { if (oldSocket.Connected) oldSocket.Shutdown(SocketShutdown.Both); } catch { /* never connected or already torn down */ }
+                        try { oldSocket.Close(); } catch { /* already closed */ }
                     }
 
                     //NTRIP endpoint
@@ -420,10 +426,14 @@ namespace AgIO
             isNTRIP_AuthSent = false;
             bytesSinceConnected = 0;
 
+            //start the data watchdog over, the old count belongs to the connection we just dropped
+            NTRIP_Watchdog = 0;
+
             //if we had a timer already, kill it
             if (tmr != null)
             {
                 tmr.Dispose();
+                tmr = null;
             }
         }
 
@@ -437,7 +447,7 @@ namespace AgIO
                 ReconnectRequest();
 
             //Once all connected set the timer GGA to NTRIP Settings
-            if (sendGGAInterval > 0 && ntripCounter == 40) tmr.Interval = sendGGAInterval * 1000;
+            if (sendGGAInterval > 0 && ntripCounter == 40 && tmr != null) tmr.Interval = sendGGAInterval * 1000;
         }
 
         private void SendAuthorization()
@@ -482,7 +492,7 @@ namespace AgIO
                     clientSocket.Send(byteDateLine, byteDateLine.Length, 0);
 
                     //enable to periodically send GGA sentence to server.
-                    if (sendGGAInterval > 0) tmr.Enabled = true;
+                    if (sendGGAInterval > 0 && tmr != null) tmr.Enabled = true;
 
                     //request sent - wait for the caster's HTTP response before declaring connected (see OnAddMessage)
                     isNTRIP_AuthSent = true;
@@ -857,12 +867,19 @@ namespace AgIO
 
         private void ShutDownNTRIP()
         {
+            //a connect still in flight reports Connected false, so the tests below would
+            //leave it open - close it here before deciding what to shut down
+            if (clientSocket != null && !clientSocket.Connected)
+            {
+                try { clientSocket.Close(); } catch { /* already closed */ }
+                clientSocket = null;
+            }
+
             if (clientSocket != null && clientSocket.Connected)
             {
                 //shut it down
                 clientSocket.Shutdown(SocketShutdown.Both);
                 clientSocket.Close();
-                System.Threading.Thread.Sleep(500);
 
                 //start it up again
                 ReconnectRequest();
@@ -885,11 +902,11 @@ namespace AgIO
 
         private void SettingsShutDownNTRIP()
         {
-            if (clientSocket != null && clientSocket.Connected)
+            if (clientSocket != null)
             {
-                clientSocket.Shutdown(SocketShutdown.Both);
-                clientSocket.Close();
-                System.Threading.Thread.Sleep(500);
+                try { if (clientSocket.Connected) clientSocket.Shutdown(SocketShutdown.Both); } catch { /* never connected or already torn down */ }
+                try { clientSocket.Close(); } catch { /* already closed */ }
+                clientSocket = null;
                 ReconnectRequest();
             }
 
