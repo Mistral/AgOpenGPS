@@ -69,8 +69,10 @@ namespace AgIO
         //scan results placed here
         public string scanReturn = "Scanning...";
         
-        // Data stream
+        // Data stream - one buffer per socket, a shared array lets two concurrent
+        // receives overwrite each other between EndReceiveFrom and Array.Copy
         private byte[] buffer = new byte[1024];
+        private byte[] loopBuffer = new byte[1024];
 
         //used to send communication check pgn= C8 or 200
         private byte[] helloFromAgIO = { 0x80, 0x81, 0x7F, 200, 3, 56, 0, 0, 0x47 };
@@ -139,7 +141,7 @@ namespace AgIO
                 loopBackSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
                 loopBackSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, true);
                 loopBackSocket.Bind(new IPEndPoint(IPAddress.Loopback, 17777));
-                loopBackSocket.BeginReceiveFrom(buffer, 0, buffer.Length, SocketFlags.None, ref endPointLoopBack, 
+                loopBackSocket.BeginReceiveFrom(loopBuffer, 0, loopBuffer.Length, SocketFlags.None, ref endPointLoopBack, 
                     new AsyncCallback(ReceiveDataLoopAsync), null);
                 Log.EventWriter("Loopback is Connected: " + IPAddress.Loopback.ToString() + ":17777");
 
@@ -251,10 +253,10 @@ namespace AgIO
                 int msgLen = loopBackSocket.EndReceiveFrom(asyncResult, ref endPointLoopBack);
 
                 byte[] localMsg = new byte[msgLen];
-                Array.Copy(buffer, localMsg, msgLen);
+                Array.Copy(loopBuffer, localMsg, msgLen);
 
                 // Listen for more connections again...
-                loopBackSocket.BeginReceiveFrom(buffer, 0, buffer.Length, SocketFlags.None, ref endPointLoopBack, 
+                loopBackSocket.BeginReceiveFrom(loopBuffer, 0, loopBuffer.Length, SocketFlags.None, ref endPointLoopBack, 
                     new AsyncCallback(ReceiveDataLoopAsync), null);
 
                 BeginInvoke((MethodInvoker)(() => ReceiveFromLoopBack(localMsg)));
