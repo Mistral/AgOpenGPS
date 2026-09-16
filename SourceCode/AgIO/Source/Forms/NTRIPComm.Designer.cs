@@ -626,25 +626,47 @@ namespace AgIO
             //we really should get here, but have to check
             if (rawTrip.Count == 0) return;
 
-            //how many bytes in the Queue
-            int cnt = rawTrip.Count;
+            //a corrupt profile could leave this at 0, which would stall the queue forever
+            int chunkSize = packetSizeNTRIP > 0 ? packetSizeNTRIP : 256;
 
-            //how many sends have occured
-            traffic.cntrGPSIn++;
+            //Can't keep up as internet dumped a shit load. Drop the stale backlog, keeping
+            //the freshest bytes, then line up on the start of an RTCM3 frame (sync byte
+            //0xD3) so a truncated frame never goes out the port.
+            if (rawTrip.Count > 10000)
+            {
+                while (rawTrip.Count > 2000) rawTrip.Dequeue();
+                while (rawTrip.Count > 0 && rawTrip.Peek() != 0xD3) rawTrip.Dequeue();
+            }
 
-            //128 bytes chunks max
-            if (cnt > packetSizeNTRIP) cnt = packetSizeNTRIP;
+            //Keep sending chunks until the queue is drained or the tick budget is spent.
+            //One chunk per tick capped the stream at packetSizeNTRIP per ~62 ms, which a
+            //big multi constellation stream can outrun - the backlog then never cleared.
+            int budget = chunkSize * 4;
 
-            //new data array to send
-            byte[] trip = new byte[cnt];
+            while (rawTrip.Count > 0 && budget > 0)
+            {
+                //how many bytes in the Queue
+                int cnt = rawTrip.Count;
 
-            traffic.cntrGPSInBytes += cnt;
+                //how many sends have occured
+                traffic.cntrGPSIn++;
 
-            //dequeue into the array
-            for (int i = 0; i < cnt; i++) trip[i] = rawTrip.Dequeue();
+                //128 bytes chunks max
+                if (cnt > chunkSize) cnt = chunkSize;
 
-            //send it
-            SendNTRIP(trip);
+                //new data array to send
+                byte[] trip = new byte[cnt];
+
+                traffic.cntrGPSInBytes += cnt;
+
+                //dequeue into the array
+                for (int i = 0; i < cnt; i++) trip[i] = rawTrip.Dequeue();
+
+                //send it
+                SendNTRIP(trip);
+
+                budget -= cnt;
+            }
 
             //Are we done?
             if (rawTrip.Count == 0)
@@ -657,9 +679,6 @@ namespace AgIO
                     traffic.cntrGPSInBytes = 0;
                 }
             }
-
-            //Can't keep up as internet dumped a shit load so clear
-            if (rawTrip.Count > 10000) rawTrip.Clear();
 
             ////show how many bytes left in the queue
             if (isViewAdvanced)
